@@ -206,10 +206,18 @@ if [[ "$MODE" == "hourly" ]]; then
 fi
 
 # Rotation — only after a successful upload; failures are logged but never
-# affect the exit code.
-rclone delete --min-age "$RETENTION_HOURLY" "$RCLONE_REMOTE/hourly" 2>/dev/null || log "hourly rotation failed"
-rclone delete --min-age "$RETENTION_DAILY" "$RCLONE_REMOTE/daily" 2>/dev/null || log "daily rotation failed"
-rclone delete --min-age "$RETENTION_PREDEPLOY" "$RCLONE_REMOTE/predeploy" 2>/dev/null || log "predeploy rotation failed"
+# affect the exit code. rclone exits 3 when the tier directory does not exist
+# yet (e.g. no predeploy dump was ever made) — nothing to rotate, not an error.
+rotate_tier() {
+    local tier="$1" retention="$2" rc=0
+    rclone delete --min-age "$retention" "$RCLONE_REMOTE/$tier" 2>/dev/null || rc=$?
+    if [[ "$rc" -ne 0 && "$rc" -ne 3 ]]; then
+        log "$tier rotation failed"
+    fi
+}
+rotate_tier hourly "$RETENTION_HOURLY"
+rotate_tier daily "$RETENTION_DAILY"
+rotate_tier predeploy "$RETENTION_PREDEPLOY"
 find "$LOCAL_DIR" -name "$BACKUP_NAME-*.sql.gz" -mmin +"$LOCAL_RETENTION_MIN" -delete || log "local rotation failed"
 
 log "Done ($MODE)"
