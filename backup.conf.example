@@ -1,0 +1,51 @@
+# db-backuper configuration (bash syntax, sourced by backup.sh).
+# Keep this file root-only (chmod 600) — it holds database and bot credentials.
+
+# Prefix for dump filenames and the cron file name. Letters, digits, dashes.
+BACKUP_NAME=myproject
+
+# Database engine: postgres | mysql
+DB_ENGINE=postgres
+
+# How to reach the database: docker (compose service) | direct (host/port)
+DB_VIA=docker
+
+# --- required when DB_VIA=docker ---
+# Credentials are read from the container environment:
+#   postgres: POSTGRES_USER, POSTGRES_DB
+#   mysql:    MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+DB_COMPOSE_FILE=/opt/myproject/docker-compose.prod.yml
+DB_COMPOSE_SERVICE=postgres
+
+# --- required when DB_VIA=direct ---
+#DB_HOST=127.0.0.1
+#DB_PORT=5432
+#DB_NAME=myproject
+#DB_USER=myproject
+#DB_PASSWORD=secret
+
+# rclone destination: any configured remote (or a plain local path).
+# Subfolders hourly/, daily/, predeploy/ are created automatically.
+RCLONE_REMOTE=yadisk:backups/myproject
+
+# Local folder for dumps, backup.log and the lock file.
+LOCAL_DIR=/opt/myproject/backups
+
+# Cron schedule for the periodic run (written to /etc/cron.d by install.sh).
+SCHEDULE="0 * * * *"
+
+# Retention: rclone --min-age values for remote tiers, minutes for local dumps.
+#RETENTION_HOURLY=48h
+#RETENTION_DAILY=30d
+#RETENTION_PREDEPLOY=90d
+#LOCAL_RETENTION_MIN=2880
+
+# Dump sanity threshold, bytes (an empty-schema dump is smaller than this).
+#MIN_SIZE_BYTES=102400
+
+# Telegram alerts on failure (optional). Proxies are tried in order:
+# TG_HTTP_PROXY, then TG_HTTP_PROXY_FALLBACK, then a direct connection.
+#TG_BOT_TOKEN=123456:AA...
+#TG_CHAT_ID=123456789
+#TG_HTTP_PROXY=http://user:pass@host:port
+#TG_HTTP_PROXY_FALLBACK=http://user:pass@host2:port
