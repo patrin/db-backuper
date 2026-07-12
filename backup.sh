@@ -113,6 +113,9 @@ if [[ "$MODE" == "files" ]]; then
         fail "config incomplete, missing:$missing"
     fi
     IFS=' ' read -r -a FILES_DIRS_ARR <<< "$FILES_DIRS"
+    if [[ "${#FILES_DIRS_ARR[@]}" -eq 0 ]]; then
+        fail "config incomplete, missing: FILES_DIRS"
+    fi
     seen_basenames=" "
     for dir in "${FILES_DIRS_ARR[@]}"; do
         if [[ ! -d "$dir" ]]; then
