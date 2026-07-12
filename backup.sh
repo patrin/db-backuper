@@ -99,6 +99,7 @@ RETENTION_HOURLY="${RETENTION_HOURLY:-48h}"
 RETENTION_DAILY="${RETENTION_DAILY:-30d}"
 RETENTION_PREDEPLOY="${RETENTION_PREDEPLOY:-90d}"
 RETENTION_TRASH="${RETENTION_TRASH:-90d}"
+FILES_MAX_DELETE="${FILES_MAX_DELETE:-500}"
 LOCAL_RETENTION_MIN="${LOCAL_RETENTION_MIN:-2880}"
 MIN_SIZE_BYTES="${MIN_SIZE_BYTES:-102400}"
 
@@ -184,6 +185,38 @@ rotate_tier() {
     fi
 }
 
+# files-trash rotation: rclone's --min-age filters on each file's own mtime,
+# which --backup-dir moves preserve — an old file would be purged seconds
+# after landing in the trash. Rotate by stamp-directory name instead: stamps
+# are fixed-width timestamps, so lexicographic comparison against a cutoff
+# is chronological. Non-fatal by contract; rclone exits 3 when files-trash
+# does not exist yet.
+rotate_files_trash() {
+    local days="${RETENTION_TRASH%d}" cutoff dirs rc=0 d
+    if [[ -z "$days" || -n "${days//[0-9]/}" ]]; then
+        log "files-trash rotation skipped: RETENTION_TRASH must look like 90d (got: $RETENTION_TRASH)"
+        return 0
+    fi
+    if ! cutoff="$(date -d "$days days ago" +%Y%m%d-%H%M%S 2>/dev/null || date -v "-${days}d" +%Y%m%d-%H%M%S 2>/dev/null)"; then
+        log "files-trash rotation failed: cannot compute cutoff"
+        return 0
+    fi
+    dirs="$(rclone lsf --dirs-only "$RCLONE_REMOTE/files-trash" 2>/dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        if [[ "$rc" -ne 3 ]]; then
+            log "files-trash rotation failed (lsf)"
+        fi
+        return 0
+    fi
+    while IFS= read -r d; do
+        if [[ -n "$d" && "${d%/}" < "$cutoff" ]]; then
+            if ! rclone purge "$RCLONE_REMOTE/files-trash/${d%/}" 2>/dev/null; then
+                log "files-trash rotation failed (purge ${d%/})"
+            fi
+        fi
+    done <<< "$dirs"
+}
+
 # Guard against overlapping runs (hourly cron vs a long predeploy dump).
 exec 9>"$LOCAL_DIR/.backup.lock"
 if [[ "$MODE" == "predeploy" ]]; then
@@ -201,12 +234,13 @@ if [[ "$MODE" == "files" ]]; then
         base="$(basename "$dir")"
         rclone sync "$dir" "$RCLONE_REMOTE/files/$base" \
             --backup-dir "$RCLONE_REMOTE/files-trash/$STAMP/$base" \
+            --max-delete "$FILES_MAX_DELETE" \
             || fail "files sync failed: $dir"
         log "Synced: $dir -> $RCLONE_REMOTE/files/$base"
     done
     # Trash rotation and pruning of emptied stamp dirs — non-fatal, the
     # mirror is already up to date. rclone exits 3 on a missing dir.
-    rotate_tier files-trash "$RETENTION_TRASH"
+    rotate_files_trash
     prune_rc=0
     rclone rmdirs --leave-root "$RCLONE_REMOTE/files-trash" 2>/dev/null || prune_rc=$?
     if [[ "$prune_rc" -ne 0 && "$prune_rc" -ne 3 ]]; then

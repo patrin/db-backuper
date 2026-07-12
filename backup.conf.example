@@ -59,5 +59,13 @@ SCHEDULE="0 * * * *"
 # Cron schedule for the files run (used by install.sh when FILES_DIRS is set).
 #FILES_SCHEDULE="30 3 * * *"
 
-# Retention for the files-trash/ tier.
+# Retention for the files-trash/ tier. Rotated by the stamp directory's own
+# name (i.e. when the file was trashed), not the file's mtime — must be of
+# the form Nd (days), e.g. 90d.
 #RETENTION_TRASH=90d
+
+# Safety guard: abort the sync (no deletions applied) if it would remove
+# more files from the destination than this in one run — protects against
+# an empty/partial source (recreated volume, migration in progress) wiping
+# out the mirror. Exits non-zero, triggers the failure alert, mirror intact.
+#FILES_MAX_DELETE=500

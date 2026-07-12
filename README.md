@@ -8,7 +8,7 @@ Stack-agnostic database backups to any [rclone](https://rclone.org) remote
 - PostgreSQL and MySQL/MariaDB; dump via `docker compose exec` or a direct connection
 - Tiered retention: `hourly/` (48h), `daily/` (30d), `predeploy/` (90d) — all configurable
 - Pre-deploy mode for "no backup — no deploy" pipelines (non-zero exit aborts your deploy)
-- File backups: mirror project directories with `rclone sync`; deleted/overwritten files are kept in a trash tier (90 days by default)
+- File backups: mirror project directories with `rclone sync`; deleted/overwritten files are kept in a trash tier (90 days by default), and a `--max-delete` guard aborts the sync if it would wipe out more than expected
 - Rotation runs only after a successful upload; never affects the exit code
 - Dump sanity checks (`gzip -t` + size threshold), `flock` guard against overlapping runs
 - Optional Telegram alerts on failure, with HTTP-proxy fallback chain
@@ -72,7 +72,16 @@ db-backup -c /etc/db-backuper/backup.conf files
 Each directory is synced to `<remote>/files/<basename>/` — an exact mirror,
 uploading only changes. Accidental deletions are recoverable: deleted and
 overwritten files move to `<remote>/files-trash/<timestamp>/…` and are kept
-for `RETENTION_TRASH` (90 days by default).
+for `RETENTION_TRASH` (90 days by default). The trash tier is rotated by its
+deletion date — the per-run timestamp directory it landed in — not by the
+moved files' own (preserved) mtimes, so old files aren't purged the moment
+they're trashed.
+
+As a safety net against a source directory going unexpectedly empty or
+partial (volume recreated, migration in progress), the sync aborts without
+deleting anything if it would remove more than `FILES_MAX_DELETE` files
+(default 500) from the destination — non-zero exit, alert, mirror left
+intact.
 
 Restore by copying back from `files/` (current version) or
 `files-trash/<timestamp>/` (deleted/previous versions).
