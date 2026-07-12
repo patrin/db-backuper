@@ -2,11 +2,13 @@
 # db-backuper — stack-agnostic database backups to any rclone remote.
 # https://github.com/patrin/db-backuper
 #
-# Usage: db-backup [-c /path/to/backup.conf] [predeploy]
+# Usage: db-backup [-c /path/to/backup.conf] [predeploy|files]
 #   (default)  — hourly run: dump goes to <remote>/hourly/; the first successful
 #                run of the day is also copied to <remote>/daily/
 #   predeploy  — dump suffixed "-predeploy" goes to <remote>/predeploy/;
 #                call it from your deploy chain and abort the deploy on non-zero exit
+#   files      — mirror FILES_DIRS to <remote>/files/<basename>/ with rclone sync;
+#                deleted/overwritten files go to <remote>/files-trash/<stamp>/
 #
 # Exit codes: 0 — success (or an hourly run skipped because another run holds
 # the lock); 1 — any dump/verify/upload failure. Rotation errors never affect
@@ -17,7 +19,7 @@ CONFIG="/etc/db-backuper/backup.conf"
 MODE="hourly"
 
 usage() {
-    echo "Usage: $0 [-c /path/to/backup.conf] [predeploy]" >&2
+    echo "Usage: $0 [-c /path/to/backup.conf] [predeploy|files]" >&2
     exit 1
 }
 
@@ -30,6 +32,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         predeploy)
             MODE="predeploy"
+            shift
+            ;;
+        files)
+            MODE="files"
             shift
             ;;
         *)
@@ -92,33 +98,57 @@ source "$CONFIG"
 RETENTION_HOURLY="${RETENTION_HOURLY:-48h}"
 RETENTION_DAILY="${RETENTION_DAILY:-30d}"
 RETENTION_PREDEPLOY="${RETENTION_PREDEPLOY:-90d}"
+RETENTION_TRASH="${RETENTION_TRASH:-90d}"
 LOCAL_RETENTION_MIN="${LOCAL_RETENTION_MIN:-2880}"
 MIN_SIZE_BYTES="${MIN_SIZE_BYTES:-102400}"
 
 missing=""
-for var in BACKUP_NAME DB_ENGINE DB_VIA RCLONE_REMOTE LOCAL_DIR; do
+for var in BACKUP_NAME RCLONE_REMOTE LOCAL_DIR; do
     if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
 done
-case "${DB_VIA:-}" in
-    docker)
-        for var in DB_COMPOSE_FILE DB_COMPOSE_SERVICE; do
-            if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
-        done
-        ;;
-    direct)
-        for var in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD; do
-            if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
-        done
-        ;;
-    *)
-        fail "DB_VIA must be docker or direct (got: '${DB_VIA:-}')"
-        ;;
-esac
-if [[ "$DB_ENGINE" != "postgres" && "$DB_ENGINE" != "mysql" ]]; then
-    fail "DB_ENGINE must be postgres or mysql (got: '$DB_ENGINE')"
-fi
-if [[ -n "$missing" ]]; then
-    fail "config incomplete, missing:$missing"
+
+if [[ "$MODE" == "files" ]]; then
+    if [[ -z "${FILES_DIRS:-}" ]]; then missing="$missing FILES_DIRS"; fi
+    if [[ -n "$missing" ]]; then
+        fail "config incomplete, missing:$missing"
+    fi
+    IFS=' ' read -r -a FILES_DIRS_ARR <<< "$FILES_DIRS"
+    seen_basenames=" "
+    for dir in "${FILES_DIRS_ARR[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            fail "FILES_DIRS entry is not a directory: $dir"
+        fi
+        base="$(basename "$dir")"
+        if [[ "$seen_basenames" == *" $base "* ]]; then
+            fail "FILES_DIRS basename clash: $base (directories must have unique basenames)"
+        fi
+        seen_basenames="$seen_basenames$base "
+    done
+else
+    for var in DB_ENGINE DB_VIA; do
+        if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
+    done
+    case "${DB_VIA:-}" in
+        docker)
+            for var in DB_COMPOSE_FILE DB_COMPOSE_SERVICE; do
+                if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
+            done
+            ;;
+        direct)
+            for var in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD; do
+                if [[ -z "${!var:-}" ]]; then missing="$missing $var"; fi
+            done
+            ;;
+        *)
+            fail "DB_VIA must be docker or direct (got: '${DB_VIA:-}')"
+            ;;
+    esac
+    if [[ -n "$missing" ]]; then
+        fail "config incomplete, missing:$missing"
+    fi
+    if [[ "$DB_ENGINE" != "postgres" && "$DB_ENGINE" != "mysql" ]]; then
+        fail "DB_ENGINE must be postgres or mysql (got: '$DB_ENGINE')"
+    fi
 fi
 
 mkdir -p "$LOCAL_DIR"
@@ -126,17 +156,30 @@ LOG_FILE="$LOCAL_DIR/backup.log"
 
 # Cron ships a minimal PATH — search the usual locations explicitly.
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-required_bins=(rclone flock gzip)
-if [[ "$DB_VIA" == "docker" ]]; then
-    required_bins+=(docker)
+required_bins=(rclone flock)
+if [[ "$MODE" == "files" ]]; then
+    : # sync needs no dump tooling
+elif [[ "$DB_VIA" == "docker" ]]; then
+    required_bins+=(docker gzip)
 elif [[ "$DB_ENGINE" == "postgres" ]]; then
-    required_bins+=(pg_dump)
+    required_bins+=(pg_dump gzip)
 else
-    required_bins+=(mysqldump)
+    required_bins+=(mysqldump gzip)
 fi
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || fail "required binary not found: $bin"
 done
+
+# Rotation — only after a successful upload; failures are logged but never
+# affect the exit code. rclone exits 3 when the tier directory does not exist
+# yet (e.g. no predeploy dump was ever made) — nothing to rotate, not an error.
+rotate_tier() {
+    local tier="$1" retention="$2" rc=0
+    rclone delete --min-age "$retention" "$RCLONE_REMOTE/$tier" 2>/dev/null || rc=$?
+    if [[ "$rc" -ne 0 && "$rc" -ne 3 ]]; then
+        log "$tier rotation failed"
+    fi
+}
 
 # Guard against overlapping runs (hourly cron vs a long predeploy dump).
 exec 9>"$LOCAL_DIR/.backup.lock"
@@ -148,6 +191,28 @@ elif ! flock -n 9; then
 fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
+
+if [[ "$MODE" == "files" ]]; then
+    log "Start (files): $FILES_DIRS"
+    for dir in "${FILES_DIRS_ARR[@]}"; do
+        base="$(basename "$dir")"
+        rclone sync "$dir" "$RCLONE_REMOTE/files/$base" \
+            --backup-dir "$RCLONE_REMOTE/files-trash/$STAMP/$base" \
+            || fail "files sync failed: $dir"
+        log "Synced: $dir -> $RCLONE_REMOTE/files/$base"
+    done
+    # Trash rotation and pruning of emptied stamp dirs — non-fatal, the
+    # mirror is already up to date. rclone exits 3 on a missing dir.
+    rotate_tier files-trash "$RETENTION_TRASH"
+    prune_rc=0
+    rclone rmdirs --leave-root "$RCLONE_REMOTE/files-trash" 2>/dev/null || prune_rc=$?
+    if [[ "$prune_rc" -ne 0 && "$prune_rc" -ne 3 ]]; then
+        log "files-trash prune failed"
+    fi
+    log "Done (files)"
+    exit 0
+fi
+
 if [[ "$MODE" == "predeploy" ]]; then
     DUMP_FILE="$LOCAL_DIR/$BACKUP_NAME-$STAMP-predeploy.sql.gz"
     REMOTE_DIR="$RCLONE_REMOTE/predeploy"
@@ -205,16 +270,6 @@ if [[ "$MODE" == "hourly" ]]; then
     fi
 fi
 
-# Rotation — only after a successful upload; failures are logged but never
-# affect the exit code. rclone exits 3 when the tier directory does not exist
-# yet (e.g. no predeploy dump was ever made) — nothing to rotate, not an error.
-rotate_tier() {
-    local tier="$1" retention="$2" rc=0
-    rclone delete --min-age "$retention" "$RCLONE_REMOTE/$tier" 2>/dev/null || rc=$?
-    if [[ "$rc" -ne 0 && "$rc" -ne 3 ]]; then
-        log "$tier rotation failed"
-    fi
-}
 rotate_tier hourly "$RETENTION_HOURLY"
 rotate_tier daily "$RETENTION_DAILY"
 rotate_tier predeploy "$RETENTION_PREDEPLOY"
