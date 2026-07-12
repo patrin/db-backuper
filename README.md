@@ -8,6 +8,7 @@ Stack-agnostic database backups to any [rclone](https://rclone.org) remote
 - PostgreSQL and MySQL/MariaDB; dump via `docker compose exec` or a direct connection
 - Tiered retention: `hourly/` (48h), `daily/` (30d), `predeploy/` (90d) — all configurable
 - Pre-deploy mode for "no backup — no deploy" pipelines (non-zero exit aborts your deploy)
+- File backups: mirror project directories with `rclone sync`; deleted/overwritten files are kept in a trash tier (90 days by default)
 - Rotation runs only after a successful upload; never affects the exit code
 - Dump sanity checks (`gzip -t` + size threshold), `flock` guard against overlapping runs
 - Optional Telegram alerts on failure, with HTTP-proxy fallback chain
@@ -56,6 +57,25 @@ deploy:
 ```
 
 If the dump or upload fails, `db-backup` exits 1 and the deploy stops.
+
+## File backups
+
+Mirror project directories (uploads, covers, attachments) to the same remote:
+
+```bash
+# in backup.conf:
+FILES_DIRS="/opt/myproject/storage/uploads"
+# re-run the installer to add a daily cron line, or test by hand:
+db-backup -c /etc/db-backuper/backup.conf files
+```
+
+Each directory is synced to `<remote>/files/<basename>/` — an exact mirror,
+uploading only changes. Accidental deletions are recoverable: deleted and
+overwritten files move to `<remote>/files-trash/<timestamp>/…` and are kept
+for `RETENTION_TRASH` (90 days by default).
+
+Restore by copying back from `files/` (current version) or
+`files-trash/<timestamp>/` (deleted/previous versions).
 
 ## Multiple projects on one server
 

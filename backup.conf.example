@@ -49,3 +49,15 @@ SCHEDULE="0 * * * *"
 #TG_CHAT_ID=123456789
 #TG_HTTP_PROXY=http://user:pass@host:port
 #TG_HTTP_PROXY_FALLBACK=http://user:pass@host2:port
+
+# --- optional: file backups (`db-backup files` mode) ---
+# Space-separated directories to mirror to $RCLONE_REMOTE/files/<basename>/.
+# Deleted/overwritten files move to files-trash/<timestamp>/ and are kept
+# for RETENTION_TRASH. Directory basenames must be unique.
+#FILES_DIRS="/opt/myproject/storage/uploads /opt/myproject/storage/covers"
+
+# Cron schedule for the files run (used by install.sh when FILES_DIRS is set).
+#FILES_SCHEDULE="30 3 * * *"
+
+# Retention for the files-trash/ tier.
+#RETENTION_TRASH=90d

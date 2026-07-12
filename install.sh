@@ -59,9 +59,15 @@ CRON_FILE="/etc/cron.d/db-backuper-$BACKUP_NAME"
 {
     echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     echo "$SCHEDULE root $BIN_PATH -c $CONF_PATH >/dev/null 2>>$LOCAL_DIR/backup.log"
+    if [[ -n "${FILES_DIRS:-}" ]]; then
+        echo "${FILES_SCHEDULE:-30 3 * * *} root $BIN_PATH -c $CONF_PATH files >/dev/null 2>>$LOCAL_DIR/backup.log"
+    fi
 } > "$CRON_FILE"
 chmod 644 "$CRON_FILE"
 echo "Cron installed: $CRON_FILE ($SCHEDULE)"
+if [[ -n "${FILES_DIRS:-}" ]]; then
+    echo "Files backup cron: ${FILES_SCHEDULE:-30 3 * * *}"
+fi
 
 cat <<'EOF'
 
