@@ -78,10 +78,10 @@ moved files' own (preserved) mtimes, so old files aren't purged the moment
 they're trashed.
 
 As a safety net against a source directory going unexpectedly empty or
-partial (volume recreated, migration in progress), the sync aborts without
-deleting anything if it would remove more than `FILES_MAX_DELETE` files
-(default 500) from the destination — non-zero exit, alert, mirror left
-intact.
+partial (volume recreated, migration in progress), the sync aborts once
+its deletions would exceed `FILES_MAX_DELETE` files (default 500) —
+non-zero exit and an alert. Up to that many files may already have moved
+to `files-trash/` before the abort; they are recoverable from there.
 
 Restore by copying back from `files/` (current version) or
 `files-trash/<timestamp>/` (deleted/previous versions).

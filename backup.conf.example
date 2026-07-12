@@ -64,8 +64,9 @@ SCHEDULE="0 * * * *"
 # the form Nd (days), e.g. 90d.
 #RETENTION_TRASH=90d
 
-# Safety guard: abort the sync (no deletions applied) if it would remove
-# more files from the destination than this in one run — protects against
-# an empty/partial source (recreated volume, migration in progress) wiping
-# out the mirror. Exits non-zero, triggers the failure alert, mirror intact.
+# Safety guard: abort the sync once its deletions would exceed this count
+# in one run — protects against an empty/partial source (recreated volume,
+# migration in progress) wiping out the mirror. Exits non-zero and triggers
+# the failure alert; up to this many files may already have moved to
+# files-trash/ before the abort (recoverable from there).
 #FILES_MAX_DELETE=500
